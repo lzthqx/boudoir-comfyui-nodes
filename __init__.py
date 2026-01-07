@@ -1574,8 +1574,8 @@ class BoudoirAllInOneNode:
             },
         }
 
-    RETURN_TYPES = ("MODEL", "LATENT", "CONDITIONING", "CONDITIONING", "VAE", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("MODEL", "LATENT", "POSITIVE", "NEGATIVE", "VAE", "prompt_text", "trigger_words", "prompt_id")
+    RETURN_TYPES = ("MODEL", "CLIP", "LATENT", "CONDITIONING", "CONDITIONING", "VAE", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("MODEL", "CLIP", "LATENT", "POSITIVE", "NEGATIVE", "VAE", "prompt_text", "trigger_words", "prompt_id")
     FUNCTION = "process"
     CATEGORY = "Boudoir Studio"
 
@@ -1656,7 +1656,7 @@ class BoudoirAllInOneNode:
         cond_neg, pooled_neg = clip_lora.encode_from_tokens(tokens_neg, return_pooled=True)
         negative_cond = [[cond_neg, {"pooled_output": pooled_neg}]]
 
-        return (model_lora, {"samples": latent}, positive_cond, negative_cond, vae, final_prompt, trigger_words, prompt_id)
+        return (model_lora, clip_lora, {"samples": latent}, positive_cond, negative_cond, vae, final_prompt, trigger_words, prompt_id)
 
     def _extract_trigger(self, lora_name):
         """Extract trigger word from LoRA metadata"""
