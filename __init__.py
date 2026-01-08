@@ -1558,8 +1558,8 @@ class BoudoirAllInOneNode:
         return {
             "required": {
                 "model": ("MODEL",),
-                "clip_name": (folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model to load"}),
-                "vae_name": (folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE to load"}),
+                "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model to load (or None to skip)"}),
+                "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE to load (or None to skip)"}),
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
                 "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
@@ -1593,15 +1593,19 @@ class BoudoirAllInOneNode:
         import comfy.utils
         import comfy.sd
 
-        # === Load CLIP ===
-        clip_path = folder_paths.get_full_path_or_raise("clip", clip_name)
-        clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
-                                   embedding_directory=folder_paths.get_folder_paths("embeddings"))
+        # === Load CLIP (or None) ===
+        clip = None
+        if clip_name and clip_name != "None":
+            clip_path = folder_paths.get_full_path_or_raise("clip", clip_name)
+            clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
+                                       embedding_directory=folder_paths.get_folder_paths("embeddings"))
 
-        # === Load VAE ===
-        vae_path = folder_paths.get_full_path_or_raise("vae", vae_name)
-        vae_sd = comfy.utils.load_torch_file(vae_path)
-        vae = comfy.sd.VAE(sd=vae_sd)
+        # === Load VAE (or None) ===
+        vae = None
+        if vae_name and vae_name != "None":
+            vae_path = folder_paths.get_full_path_or_raise("vae", vae_name)
+            vae_sd = comfy.utils.load_torch_file(vae_path)
+            vae = comfy.sd.VAE(sd=vae_sd)
 
         # === Apply LoRA and extract trigger ===
         model_lora = model
@@ -1647,14 +1651,17 @@ class BoudoirAllInOneNode:
         width, height = map(int, dimensions.split("x"))
         latent = torch.zeros([batch_size, 4, height // 8, width // 8])
 
-        # === Encode prompts ===
-        tokens_pos = clip_lora.tokenize(final_prompt)
-        cond_pos, pooled_pos = clip_lora.encode_from_tokens(tokens_pos, return_pooled=True)
-        positive_cond = [[cond_pos, {"pooled_output": pooled_pos}]]
+        # === Encode prompts (only if CLIP is loaded) ===
+        positive_cond = None
+        negative_cond = None
+        if clip_lora is not None:
+            tokens_pos = clip_lora.tokenize(final_prompt)
+            cond_pos, pooled_pos = clip_lora.encode_from_tokens(tokens_pos, return_pooled=True)
+            positive_cond = [[cond_pos, {"pooled_output": pooled_pos}]]
 
-        tokens_neg = clip_lora.tokenize(negative_prompt)
-        cond_neg, pooled_neg = clip_lora.encode_from_tokens(tokens_neg, return_pooled=True)
-        negative_cond = [[cond_neg, {"pooled_output": pooled_neg}]]
+            tokens_neg = clip_lora.tokenize(negative_prompt)
+            cond_neg, pooled_neg = clip_lora.encode_from_tokens(tokens_neg, return_pooled=True)
+            negative_cond = [[cond_neg, {"pooled_output": pooled_neg}]]
 
         return (model_lora, clip_lora, {"samples": latent}, positive_cond, negative_cond, vae, final_prompt, trigger_words, prompt_id)
 
