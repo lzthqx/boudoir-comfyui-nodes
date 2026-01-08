@@ -1532,6 +1532,17 @@ class LoRAFolderLoaderModelClipWithTrigger:
             return ""
 
 
+def get_available_gpus():
+    """Get list of available GPU devices for selection"""
+    import torch
+    devices = ["auto"]  # Let ComfyUI decide
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            name = torch.cuda.get_device_name(i)
+            devices.append(f"cuda:{i} ({name})")
+    return devices
+
+
 class BoudoirAllInOneNode:
     """
     All-in-one node for Boudoir Studio workflows.
@@ -1555,11 +1566,14 @@ class BoudoirAllInOneNode:
     @classmethod
     def INPUT_TYPES(cls):
         import folder_paths
+        gpu_options = get_available_gpus()
         return {
             "required": {
                 "model": ("MODEL",),
                 "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model to load (or None to skip)"}),
+                "clip_device": (gpu_options, {"default": "auto", "tooltip": "GPU for CLIP model"}),
                 "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE to load (or None to skip)"}),
+                "vae_device": (gpu_options, {"default": "auto", "tooltip": "GPU for VAE model"}),
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
                 "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
@@ -1585,27 +1599,44 @@ class BoudoirAllInOneNode:
             return seed
         return ""
 
-    def process(self, model, clip_name, vae_name, resolution, batch_size,
+    def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
                 use_random_prompt, prompt_category, positive_prompt, negative_prompt,
                 lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed):
         import torch
         import folder_paths
         import comfy.utils
         import comfy.sd
+        import comfy.model_management
+
+        # Parse device selection (extract "cuda:0" from "cuda:0 (GPU Name)")
+        def parse_device(device_str):
+            if device_str == "auto" or not device_str:
+                return None  # Let ComfyUI decide
+            return device_str.split(" ")[0]  # Get "cuda:0" from "cuda:0 (Name)"
+
+        clip_dev = parse_device(clip_device)
+        vae_dev = parse_device(vae_device)
 
         # === Load CLIP (or None) ===
         clip = None
         if clip_name and clip_name != "None":
             clip_path = folder_paths.get_full_path_or_raise("clip", clip_name)
+            model_options = {}
+            if clip_dev:
+                model_options["load_device"] = torch.device(clip_dev)
             clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
-                                       embedding_directory=folder_paths.get_folder_paths("embeddings"))
+                                       embedding_directory=folder_paths.get_folder_paths("embeddings"),
+                                       model_options=model_options if model_options else None)
 
         # === Load VAE (or None) ===
         vae = None
         if vae_name and vae_name != "None":
             vae_path = folder_paths.get_full_path_or_raise("vae", vae_name)
             vae_sd = comfy.utils.load_torch_file(vae_path)
-            vae = comfy.sd.VAE(sd=vae_sd)
+            if vae_dev:
+                vae = comfy.sd.VAE(sd=vae_sd, device=torch.device(vae_dev))
+            else:
+                vae = comfy.sd.VAE(sd=vae_sd)
 
         # === Apply LoRA and extract trigger ===
         model_lora = model
