@@ -2124,16 +2124,30 @@ class ZImageResolutionSelector:
 OLLAMA_DEFAULT_URL = "http://10.10.10.138:11434"
 
 # Default system prompt for prompt enhancement
-OLLAMA_DEFAULT_SYSTEM_PROMPT = """You are a prompt enhancement specialist for AI image generation.
-Your task is to take the user's prompt and enhance it to be more detailed and descriptive while maintaining the original intent.
+OLLAMA_DEFAULT_SYSTEM_PROMPT = """You are a cinematic prompt enhancer for boudoir and fine art photography AI generation.
 
-Guidelines:
-- Add sensory details (lighting, textures, atmosphere)
-- Include artistic style references where appropriate
-- Maintain the core subject and mood
-- Keep the output as a single flowing prompt paragraph
-- Do NOT include any explanations or commentary
-- Output ONLY the enhanced prompt text"""
+Your task is to enhance the given prompt with technical and artistic qualities WITHOUT adding new subjects, objects, props, or scene elements.
+
+ENHANCE WITH:
+- Cinematic lighting (Rembrandt, rim light, soft diffused, chiaroscuro, golden hour glow)
+- Camera perspective (low angle, eye level, three-quarter view, intimate close-up)
+- Depth of field (shallow DoF, creamy bokeh, sharp focus on subject)
+- Mood and atmosphere (intimate, sensual, ethereal, dramatic, serene)
+- Film/photo quality (35mm film grain, medium format clarity, editorial quality)
+- Artistic style references (fine art, classical painting influence, contemporary)
+
+DO NOT ADD:
+- Props, furniture, fabrics, or objects not mentioned
+- Background elements or locations not specified
+- Clothing, accessories, or items not in the original
+- Additional people or body parts
+
+RULES:
+- Preserve ALL original elements exactly as described
+- Only enhance the artistic and technical presentation
+- Output a single flowing prompt paragraph
+- No explanations, no markdown, no commentary
+- Keep output concise (50-100 words)"""
 
 def get_ollama_models(server_url=None):
     """Fetch available models from Ollama server"""
@@ -2150,18 +2164,6 @@ def get_ollama_models(server_url=None):
     return ["llama3.1:latest", "mistral:latest", "qwen2.5:latest"]  # Fallback defaults
 
 
-class BoudoirTestNode:
-    """Minimal test node to verify registration works."""
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {"required": {"text": ("STRING", {"default": "test"})}}
-    RETURN_TYPES = ("STRING",)
-    FUNCTION = "run"
-    CATEGORY = "Boudoir Studio/Test"
-    def run(self, text):
-        return (text,)
-
-
 class OllamaPromptEnhancer:
     """
     Ollama-powered prompt enhancement node.
@@ -2174,6 +2176,7 @@ class OllamaPromptEnhancer:
 
     @classmethod
     def INPUT_TYPES(cls):
+        models = get_ollama_models()
         return {
             "required": {
                 "prompt": ("STRING", {
@@ -2181,13 +2184,13 @@ class OllamaPromptEnhancer:
                     "default": "",
                     "placeholder": "Enter prompt to enhance..."
                 }),
-                "ollama_model": (get_ollama_models(), {
-                    "default": get_ollama_models()[0] if get_ollama_models() else "qwen2.5:latest",
-                    "tooltip": "Select Ollama model for enhancement"
+                "ollama_model": (models, {
+                    "default": models[0] if models else "qwen2.5:latest",
+                    "tooltip": "Select Ollama model for prompt enhancement"
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
-                    "default": "Enhance this prompt for AI image generation. Add details about lighting, atmosphere, and artistic style. Output only the enhanced prompt.",
+                    "default": OLLAMA_DEFAULT_SYSTEM_PROMPT,
                     "tooltip": "System prompt that controls how enhancement works"
                 }),
                 "enabled": ("BOOLEAN", {
@@ -2224,6 +2227,7 @@ class OllamaPromptEnhancer:
 
     RETURN_TYPES = ("STRING", "STRING")
     RETURN_NAMES = ("enhanced_prompt", "trigger_out")
+    OUTPUT_NODE = True
     FUNCTION = "enhance_prompt"
     CATEGORY = "Boudoir Studio/Prompts"
 
@@ -2241,7 +2245,7 @@ class OllamaPromptEnhancer:
                     final_prompt = f"{trigger_out} {final_prompt}" if final_prompt else trigger_out
                 else:
                     final_prompt = f"{final_prompt} {trigger_out}" if final_prompt else trigger_out
-            return (final_prompt, trigger_out)
+            return {"ui": {"text": [final_prompt]}, "result": (final_prompt, trigger_out)}
 
         # Enhance the prompt via Ollama
         server_url = ollama_url or OLLAMA_DEFAULT_URL
@@ -2288,7 +2292,7 @@ class OllamaPromptEnhancer:
             else:
                 final_prompt = f"{enhanced} {trigger_out}"
 
-        return (final_prompt, trigger_out)
+        return {"ui": {"text": [final_prompt]}, "result": (final_prompt, trigger_out)}
 
 
 class OllamaPromptEnhancerAdvanced:
@@ -2302,6 +2306,7 @@ class OllamaPromptEnhancerAdvanced:
 
     @classmethod
     def INPUT_TYPES(cls):
+        models = get_ollama_models()
         return {
             "required": {
                 "clip": ("CLIP",),
@@ -2310,13 +2315,13 @@ class OllamaPromptEnhancerAdvanced:
                     "default": "",
                     "placeholder": "Enter prompt to enhance..."
                 }),
-                "ollama_model": (get_ollama_models(), {
-                    "default": get_ollama_models()[0] if get_ollama_models() else "qwen2.5:latest",
-                    "tooltip": "Select Ollama model for enhancement"
+                "ollama_model": (models, {
+                    "default": models[0] if models else "qwen2.5:latest",
+                    "tooltip": "Select Ollama model for prompt enhancement"
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
-                    "default": "Enhance this prompt for AI image generation. Add details about lighting, atmosphere, and artistic style. Output only the enhanced prompt."
+                    "default": OLLAMA_DEFAULT_SYSTEM_PROMPT
                 }),
                 "enabled": ("BOOLEAN", {
                     "default": True,
@@ -2343,6 +2348,7 @@ class OllamaPromptEnhancerAdvanced:
 
     RETURN_TYPES = ("CONDITIONING", "STRING", "STRING")
     RETURN_NAMES = ("CONDITIONING", "enhanced_prompt", "trigger_out")
+    OUTPUT_NODE = True
     FUNCTION = "enhance_and_encode"
     CATEGORY = "Boudoir Studio/Prompts"
 
@@ -2405,7 +2411,7 @@ class OllamaPromptEnhancerAdvanced:
         cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
         conditioning = [[cond, {"pooled_output": pooled}]]
 
-        return (conditioning, final_prompt, trigger_out)
+        return {"ui": {"text": [final_prompt]}, "result": (conditioning, final_prompt, trigger_out)}
 
 
 # Node mappings for ComfyUI
@@ -2430,7 +2436,6 @@ NODE_CLASS_MAPPINGS = {
     "ZImageResolutionSelector": ZImageResolutionSelector,
     "OllamaPromptEnhancer": OllamaPromptEnhancer,
     "OllamaPromptEnhancerAdvanced": OllamaPromptEnhancerAdvanced,
-    "BoudoirTestNode": BoudoirTestNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2454,5 +2459,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ZImageResolutionSelector": "Boudoir Z-Image Resolution Selector",
     "OllamaPromptEnhancer": "Boudoir Prompt Enhancer",
     "OllamaPromptEnhancerAdvanced": "Boudoir Prompt Enhancer (CONDITIONING)",
-    "BoudoirTestNode": "Boudoir Test Node",
 }
