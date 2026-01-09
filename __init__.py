@@ -2149,6 +2149,30 @@ RULES:
 - No explanations, no markdown, no commentary
 - Keep output concise (50-100 words)"""
 
+# System prompt for Super-Node - focused on pure enhancement without additions
+SUPERNODE_SYSTEM_PROMPT = """You are a cinematic prompt enhancer for AI image generation.
+
+Your task is to make the given prompt MORE DESCRIPTIVE without changing what it describes.
+
+ENHANCE WITH:
+- More specific lighting details (color temperature, direction, quality)
+- Atmospheric qualities (mood, feeling, ambiance)
+- Technical photography terms (depth, focus, perspective)
+- Artistic descriptors (texture, tone, style)
+
+DO NOT:
+- Add new subjects, objects, or people
+- Add props, furniture, or items not mentioned
+- Change the core meaning or subject
+- Add locations or backgrounds not specified
+
+RULES:
+- Preserve ALL original elements exactly
+- Only expand and enrich existing descriptions
+- Output a single flowing prompt paragraph
+- No explanations, no markdown, no commentary
+- Keep output concise (50-100 words)"""
+
 def get_ollama_models(server_url=None):
     """Fetch available models from Ollama server"""
     url = server_url or OLLAMA_DEFAULT_URL
@@ -2414,6 +2438,151 @@ class OllamaPromptEnhancerAdvanced:
         return {"ui": {"text": [final_prompt]}, "result": (conditioning, final_prompt, trigger_out)}
 
 
+class BoudoirSuperNode:
+    """
+    Boudoir Super-Node: Enhanced prompt processing with full pass-through capability.
+
+    Takes text_positive and text_negative from styling nodes, enhances the positive
+    prompt via Ollama, passes negative through unchanged, and outputs both as
+    CONDITIONING for direct sampler connection.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        models = get_ollama_models()
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "text_positive": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "Positive prompt to enhance..."
+                }),
+                "text_negative": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "Negative prompt (passed through unchanged)..."
+                }),
+                "ollama_model": (models, {
+                    "default": models[0] if models else "qwen2.5:latest",
+                    "tooltip": "Select Ollama model for prompt enhancement"
+                }),
+                "enhance_enabled": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Enhance",
+                    "label_off": "Bypass",
+                    "tooltip": "Toggle prompt enhancement on/off"
+                }),
+                "temperature": ("FLOAT", {
+                    "default": 0.7,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.1,
+                    "tooltip": "Generation temperature (higher = more creative)"
+                }),
+                "system_prompt": ("STRING", {
+                    "multiline": True,
+                    "default": SUPERNODE_SYSTEM_PROMPT,
+                    "tooltip": "System prompt controlling enhancement behavior"
+                }),
+            },
+            "optional": {
+                "trigger_in": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Trigger words to include in output prompt"
+                }),
+                "ollama_url": ("STRING", {
+                    "default": OLLAMA_DEFAULT_URL,
+                    "tooltip": "Ollama server URL"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "CONDITIONING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("CONDITIONING", "CONDITIONING_NEG", "text_positive", "text_negative", "trigger_out")
+    OUTPUT_NODE = True
+    FUNCTION = "process"
+    CATEGORY = "Boudoir Studio/Prompts"
+
+    def process(self, clip, text_positive, text_negative, ollama_model, enhance_enabled,
+                temperature, system_prompt, trigger_in=None, ollama_url=None):
+        """
+        Process prompts: enhance positive via Ollama, pass-through negative, encode both.
+        """
+        # Pass through trigger words unchanged
+        trigger_out = trigger_in.strip() if trigger_in else ""
+
+        # Pass through negative prompt unchanged
+        negative_out = text_negative.strip() if text_negative else ""
+
+        # Process positive prompt
+        positive_input = text_positive.strip() if text_positive else ""
+
+        if not enhance_enabled or not positive_input:
+            # Bypass mode - pass through unchanged
+            enhanced_positive = positive_input
+        else:
+            # Enhance via Ollama
+            server_url = ollama_url or OLLAMA_DEFAULT_URL
+
+            try:
+                print(f"[BoudoirSuperNode] Enhancing prompt with {ollama_model}...")
+
+                request_data = {
+                    "model": ollama_model,
+                    "prompt": positive_input,
+                    "system": system_prompt,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "top_p": 0.9
+                    }
+                }
+
+                req = urllib.request.Request(
+                    f"{server_url}/api/generate",
+                    data=json.dumps(request_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode())
+                    enhanced_positive = data.get("response", "").strip()
+
+                if not enhanced_positive:
+                    print("[BoudoirSuperNode] Empty response, using original prompt")
+                    enhanced_positive = positive_input
+                else:
+                    print(f"[BoudoirSuperNode] Enhanced ({len(positive_input)} -> {len(enhanced_positive)} chars)")
+
+            except Exception as e:
+                print(f"[BoudoirSuperNode] Error: {e}")
+                enhanced_positive = positive_input  # Fall back to original
+
+        # Combine trigger words with enhanced positive
+        final_positive = enhanced_positive
+        if trigger_out:
+            final_positive = f"{trigger_out} {enhanced_positive}"
+
+        # Encode positive prompt to CONDITIONING
+        tokens_pos = clip.tokenize(final_positive)
+        cond_pos, pooled_pos = clip.encode_from_tokens(tokens_pos, return_pooled=True)
+        conditioning_pos = [[cond_pos, {"pooled_output": pooled_pos}]]
+
+        # Encode negative prompt to CONDITIONING
+        tokens_neg = clip.tokenize(negative_out) if negative_out else clip.tokenize("")
+        cond_neg, pooled_neg = clip.encode_from_tokens(tokens_neg, return_pooled=True)
+        conditioning_neg = [[cond_neg, {"pooled_output": pooled_neg}]]
+
+        return {
+            "ui": {"text": [final_positive]},
+            "result": (conditioning_pos, conditioning_neg, final_positive, negative_out, trigger_out)
+        }
+
+
 # Node mappings for ComfyUI
 NODE_CLASS_MAPPINGS = {
     "BoudoirPromptSearch": BoudoirPromptSearch,
@@ -2436,6 +2605,7 @@ NODE_CLASS_MAPPINGS = {
     "ZImageResolutionSelector": ZImageResolutionSelector,
     "OllamaPromptEnhancer": OllamaPromptEnhancer,
     "OllamaPromptEnhancerAdvanced": OllamaPromptEnhancerAdvanced,
+    "BoudoirSuperNode": BoudoirSuperNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2459,4 +2629,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ZImageResolutionSelector": "Boudoir Z-Image Resolution Selector",
     "OllamaPromptEnhancer": "Boudoir Prompt Enhancer",
     "OllamaPromptEnhancerAdvanced": "Boudoir Prompt Enhancer (CONDITIONING)",
+    "BoudoirSuperNode": "Boudoir Super-Node",
 }

@@ -6,8 +6,9 @@ app.registerExtension({
     name: "BoudoirPromptLibrary.OllamaEnhancer",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        // Handle both OllamaPromptEnhancer and OllamaPromptEnhancerAdvanced
-        if (nodeData.name !== "OllamaPromptEnhancer" && nodeData.name !== "OllamaPromptEnhancerAdvanced") {
+        // Handle OllamaPromptEnhancer, OllamaPromptEnhancerAdvanced, and BoudoirSuperNode
+        const enhancerNodes = ["OllamaPromptEnhancer", "OllamaPromptEnhancerAdvanced", "BoudoirSuperNode"];
+        if (!enhancerNodes.includes(nodeData.name)) {
             return;
         }
 
