@@ -2492,6 +2492,7 @@ class BoudoirSuperNode:
                 "ollama_model": (ollama_models, {"default": ollama_models[0] if ollama_models else "qwen2.5:latest", "tooltip": "Ollama model for enhancement"}),
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "Enhancement temperature"}),
                 "system_prompt": ("STRING", {"multiline": True, "default": SUPERNODE_SYSTEM_PROMPT, "tooltip": "System prompt for enhancement"}),
+                "extra_triggers": ("STRING", {"default": "", "multiline": False, "placeholder": "Extra trigger words from upstream LoRAs", "tooltip": "Additional trigger words to prepend (from LoRAs loaded before this node)"}),
             },
             "optional": {
                 "clip_in": ("CLIP", {"tooltip": "Optional CLIP from checkpoint loader"}),
@@ -2515,7 +2516,7 @@ class BoudoirSuperNode:
     def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
                 use_random_prompt, prompt_category, positive_prompt, negative_prompt,
                 lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed,
-                enhance_enabled, ollama_model, temperature, system_prompt,
+                enhance_enabled, ollama_model, temperature, system_prompt, extra_triggers,
                 clip_in=None, vae_in=None, ollama_url=None):
         import torch
         import folder_paths
@@ -2625,10 +2626,15 @@ class BoudoirSuperNode:
                 print(f"[BoudoirSuperNode] Enhancement error: {e}")
                 enhanced_prompt = base_prompt
 
-        # Prepend trigger words to enhanced prompt
+        # Prepend trigger words to enhanced prompt (internal LoRA + extra upstream triggers)
         final_prompt = enhanced_prompt
+        all_triggers = []
         if trigger_words.strip():
-            final_prompt = f"{trigger_words.strip()} {enhanced_prompt}"
+            all_triggers.append(trigger_words.strip())
+        if extra_triggers.strip():
+            all_triggers.append(extra_triggers.strip())
+        if all_triggers:
+            final_prompt = f"{' '.join(all_triggers)} {enhanced_prompt}"
 
         # === Create latent ===
         dimensions = resolution.split(" - ")[1].split(" ")[0]
