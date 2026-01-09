@@ -2440,106 +2440,169 @@ class OllamaPromptEnhancerAdvanced:
 
 class BoudoirSuperNode:
     """
-    Boudoir Super-Node: Enhanced prompt processing with full pass-through capability.
+    Boudoir Super-Node: Complete workflow node combining All-In-One functionality
+    with Ollama prompt enhancement.
 
-    Takes text_positive and text_negative from styling nodes, enhances the positive
-    prompt via Ollama, passes negative through unchanged, and outputs both as
-    CONDITIONING for direct sampler connection.
+    Features:
+    - CLIP/VAE loading (or pass-through from checkpoint)
+    - LoRA loading with trigger word extraction
+    - Resolution selection and latent creation
+    - Random prompt from database OR manual prompt
+    - Ollama-powered prompt enhancement (optional)
+    - Full CONDITIONING output
     """
 
+    RESOLUTIONS = [
+        "1:1 - 1328x1328 (Square)",
+        "16:9 - 1664x928 (Landscape)",
+        "9:16 - 928x1664 (Portrait)",
+        "4:3 - 1472x1104 (Landscape)",
+        "3:4 - 1104x1472 (Portrait)",
+        "3:2 - 1584x1056 (Landscape)",
+        "2:3 - 1056x1584 (Portrait)",
+    ]
+
     def __init__(self):
-        pass
+        self.loaded_lora = None
 
     @classmethod
     def INPUT_TYPES(cls):
-        models = get_ollama_models()
+        import folder_paths
+        gpu_options = get_available_gpus()
+        ollama_models = get_ollama_models()
         return {
             "required": {
-                "clip": ("CLIP",),
-                "text_positive": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "Positive prompt to enhance..."
-                }),
-                "text_negative": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "Negative prompt (passed through unchanged)..."
-                }),
-                "ollama_model": (models, {
-                    "default": models[0] if models else "qwen2.5:latest",
-                    "tooltip": "Select Ollama model for prompt enhancement"
-                }),
-                "enhance_enabled": ("BOOLEAN", {
-                    "default": True,
-                    "label_on": "Enhance",
-                    "label_off": "Bypass",
-                    "tooltip": "Toggle prompt enhancement on/off"
-                }),
-                "temperature": ("FLOAT", {
-                    "default": 0.7,
-                    "min": 0.0,
-                    "max": 2.0,
-                    "step": 0.1,
-                    "tooltip": "Generation temperature (higher = more creative)"
-                }),
-                "system_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": SUPERNODE_SYSTEM_PROMPT,
-                    "tooltip": "System prompt controlling enhancement behavior"
-                }),
+                "model": ("MODEL",),
+                "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model (ignored if CLIP input connected)"}),
+                "clip_device": (gpu_options, {"default": "auto", "tooltip": "GPU for CLIP model"}),
+                "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE (ignored if VAE input connected)"}),
+                "vae_device": (gpu_options, {"default": "auto", "tooltip": "GPU for VAE model"}),
+                "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
+                "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
+                "prompt_category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {"default": "any"}),
+                "positive_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Positive prompt (used when Manual Prompt selected)"}),
+                "negative_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Negative prompt"}),
+                "lora_name": (["None"] + folder_paths.get_filename_list("loras"), {"tooltip": "Select LoRA (optional)"}),
+                "lora_strength_model": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "lora_strength_clip": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "use_trigger": ("BOOLEAN", {"default": True, "label_on": "Add Trigger Word", "label_off": "No Trigger"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1, "tooltip": "Seed for random prompt"}),
+                "enhance_enabled": ("BOOLEAN", {"default": True, "label_on": "Enhance Prompt", "label_off": "No Enhancement", "tooltip": "Enable Ollama prompt enhancement"}),
+                "ollama_model": (ollama_models, {"default": ollama_models[0] if ollama_models else "qwen2.5:latest", "tooltip": "Ollama model for enhancement"}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1, "tooltip": "Enhancement temperature"}),
+                "system_prompt": ("STRING", {"multiline": True, "default": SUPERNODE_SYSTEM_PROMPT, "tooltip": "System prompt for enhancement"}),
             },
             "optional": {
-                "trigger_in": ("STRING", {
-                    "forceInput": True,
-                    "tooltip": "Trigger words to include in output prompt"
-                }),
-                "ollama_url": ("STRING", {
-                    "default": OLLAMA_DEFAULT_URL,
-                    "tooltip": "Ollama server URL"
-                }),
+                "clip_in": ("CLIP", {"tooltip": "Optional CLIP from checkpoint loader"}),
+                "vae_in": ("VAE", {"tooltip": "Optional VAE from checkpoint loader"}),
+                "ollama_url": ("STRING", {"default": OLLAMA_DEFAULT_URL, "tooltip": "Ollama server URL"}),
             },
         }
 
-    RETURN_TYPES = ("CONDITIONING", "CONDITIONING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("CONDITIONING", "CONDITIONING_NEG", "text_positive", "text_negative", "trigger_out")
+    RETURN_TYPES = ("MODEL", "CLIP", "LATENT", "CONDITIONING", "CONDITIONING", "VAE", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("MODEL", "CLIP", "LATENT", "POSITIVE", "NEGATIVE", "VAE", "prompt_text", "enhanced_text", "trigger_words", "prompt_id")
     OUTPUT_NODE = True
     FUNCTION = "process"
-    CATEGORY = "Boudoir Studio/Prompts"
+    CATEGORY = "Boudoir Studio"
 
-    def process(self, clip, text_positive, text_negative, ollama_model, enhance_enabled,
-                temperature, system_prompt, trigger_in=None, ollama_url=None):
-        """
-        Process prompts: enhance positive via Ollama, pass-through negative, encode both.
-        """
-        # Pass through trigger words unchanged
-        trigger_out = trigger_in.strip() if trigger_in else ""
+    @classmethod
+    def IS_CHANGED(cls, use_random_prompt, seed, enhance_enabled, **kwargs):
+        if use_random_prompt or enhance_enabled:
+            return seed
+        return ""
 
-        # Pass through negative prompt unchanged
-        negative_out = text_negative.strip() if text_negative else ""
+    def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
+                use_random_prompt, prompt_category, positive_prompt, negative_prompt,
+                lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed,
+                enhance_enabled, ollama_model, temperature, system_prompt,
+                clip_in=None, vae_in=None, ollama_url=None):
+        import torch
+        import folder_paths
+        import comfy.utils
+        import comfy.sd
+        import comfy.model_management
 
-        # Process positive prompt
-        positive_input = text_positive.strip() if text_positive else ""
+        def parse_device(device_str):
+            if device_str == "auto" or not device_str:
+                return None
+            return device_str.split(" ")[0]
 
-        if not enhance_enabled or not positive_input:
-            # Bypass mode - pass through unchanged
-            enhanced_positive = positive_input
+        clip_dev = parse_device(clip_device)
+        vae_dev = parse_device(vae_device)
+
+        # === CLIP: Use input if connected, otherwise load ===
+        clip = None
+        if clip_in is not None:
+            clip = clip_in
+        elif clip_name and clip_name != "None":
+            clip_path = folder_paths.get_full_path_or_raise("clip", clip_name)
+            model_options = {}
+            if clip_dev:
+                model_options["load_device"] = torch.device(clip_dev)
+            clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
+                                       embedding_directory=folder_paths.get_folder_paths("embeddings"),
+                                       model_options=model_options)
+
+        # === VAE: Use input if connected, otherwise load ===
+        vae = None
+        if vae_in is not None:
+            vae = vae_in
+        elif vae_name and vae_name != "None":
+            vae_path = folder_paths.get_full_path_or_raise("vae", vae_name)
+            vae_sd = comfy.utils.load_torch_file(vae_path)
+            if vae_dev:
+                vae = comfy.sd.VAE(sd=vae_sd, device=torch.device(vae_dev))
+            else:
+                vae = comfy.sd.VAE(sd=vae_sd)
+
+        # === Apply LoRA and extract trigger ===
+        model_lora = model
+        clip_lora = clip
+        trigger_words = ""
+
+        if lora_name and lora_name != "None":
+            lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
+            lora = None
+
+            if self.loaded_lora is not None:
+                if self.loaded_lora[0] == lora_path:
+                    lora = self.loaded_lora[1]
+                else:
+                    self.loaded_lora = None
+
+            if lora is None:
+                lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+                self.loaded_lora = (lora_path, lora)
+
+            if lora_strength_model != 0 or lora_strength_clip != 0:
+                model_lora, clip_lora = comfy.sd.load_lora_for_models(
+                    model, clip, lora, lora_strength_model, lora_strength_clip
+                )
+
+            if use_trigger:
+                trigger_words = self._extract_trigger(lora_name)
+
+        # === Get prompt (random or manual) ===
+        prompt_id = ""
+        if use_random_prompt:
+            base_prompt, prompt_id = self._get_random_prompt(prompt_category)
         else:
-            # Enhance via Ollama
-            server_url = ollama_url or OLLAMA_DEFAULT_URL
+            base_prompt = positive_prompt
 
+        # === Enhance prompt via Ollama (if enabled) ===
+        enhanced_prompt = base_prompt
+        if enhance_enabled and base_prompt.strip():
+            server_url = ollama_url or OLLAMA_DEFAULT_URL
             try:
                 print(f"[BoudoirSuperNode] Enhancing prompt with {ollama_model}...")
 
                 request_data = {
                     "model": ollama_model,
-                    "prompt": positive_input,
+                    "prompt": base_prompt.strip(),
                     "system": system_prompt,
                     "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "top_p": 0.9
-                    }
+                    "options": {"temperature": temperature, "top_p": 0.9}
                 }
 
                 req = urllib.request.Request(
@@ -2550,37 +2613,111 @@ class BoudoirSuperNode:
 
                 with urllib.request.urlopen(req, timeout=60) as response:
                     data = json.loads(response.read().decode())
-                    enhanced_positive = data.get("response", "").strip()
+                    enhanced_prompt = data.get("response", "").strip()
 
-                if not enhanced_positive:
-                    print("[BoudoirSuperNode] Empty response, using original prompt")
-                    enhanced_positive = positive_input
+                if not enhanced_prompt:
+                    print("[BoudoirSuperNode] Empty response, using original")
+                    enhanced_prompt = base_prompt
                 else:
-                    print(f"[BoudoirSuperNode] Enhanced ({len(positive_input)} -> {len(enhanced_positive)} chars)")
+                    print(f"[BoudoirSuperNode] Enhanced ({len(base_prompt)} -> {len(enhanced_prompt)} chars)")
 
             except Exception as e:
-                print(f"[BoudoirSuperNode] Error: {e}")
-                enhanced_positive = positive_input  # Fall back to original
+                print(f"[BoudoirSuperNode] Enhancement error: {e}")
+                enhanced_prompt = base_prompt
 
-        # Combine trigger words with enhanced positive
-        final_positive = enhanced_positive
-        if trigger_out:
-            final_positive = f"{trigger_out} {enhanced_positive}"
+        # Prepend trigger words to enhanced prompt
+        final_prompt = enhanced_prompt
+        if trigger_words.strip():
+            final_prompt = f"{trigger_words.strip()} {enhanced_prompt}"
 
-        # Encode positive prompt to CONDITIONING
-        tokens_pos = clip.tokenize(final_positive)
-        cond_pos, pooled_pos = clip.encode_from_tokens(tokens_pos, return_pooled=True)
-        conditioning_pos = [[cond_pos, {"pooled_output": pooled_pos}]]
+        # === Create latent ===
+        dimensions = resolution.split(" - ")[1].split(" ")[0]
+        width, height = map(int, dimensions.split("x"))
+        latent = torch.zeros([batch_size, 4, height // 8, width // 8])
 
-        # Encode negative prompt to CONDITIONING
-        tokens_neg = clip.tokenize(negative_out) if negative_out else clip.tokenize("")
-        cond_neg, pooled_neg = clip.encode_from_tokens(tokens_neg, return_pooled=True)
-        conditioning_neg = [[cond_neg, {"pooled_output": pooled_neg}]]
+        # === Encode prompts ===
+        positive_cond = None
+        negative_cond = None
+        if clip_lora is not None:
+            tokens_pos = clip_lora.tokenize(final_prompt)
+            cond_pos, pooled_pos = clip_lora.encode_from_tokens(tokens_pos, return_pooled=True)
+            positive_cond = [[cond_pos, {"pooled_output": pooled_pos}]]
+
+            tokens_neg = clip_lora.tokenize(negative_prompt)
+            cond_neg, pooled_neg = clip_lora.encode_from_tokens(tokens_neg, return_pooled=True)
+            negative_cond = [[cond_neg, {"pooled_output": pooled_neg}]]
 
         return {
-            "ui": {"text": [final_positive]},
-            "result": (conditioning_pos, conditioning_neg, final_positive, negative_out, trigger_out)
+            "ui": {"text": [final_prompt]},
+            "result": (model_lora, clip_lora, {"samples": latent}, positive_cond, negative_cond, vae, base_prompt, final_prompt, trigger_words, prompt_id)
         }
+
+    def _extract_trigger(self, lora_name):
+        """Extract trigger word from LoRA metadata"""
+        try:
+            from safetensors import safe_open
+            import folder_paths
+
+            lora_path = folder_paths.get_full_path("loras", lora_name)
+            if not lora_path or not os.path.exists(lora_path):
+                return ""
+
+            with safe_open(lora_path, framework='pt') as f:
+                meta = f.metadata()
+
+            if not meta:
+                return ""
+
+            trigger_word = meta.get('modelspec.trigger_phrase', '')
+
+            if not trigger_word and 'ss_tag_frequency' in meta:
+                try:
+                    tags_data = json.loads(meta['ss_tag_frequency'])
+                    all_tags = {}
+                    for dataset, tag_dict in tags_data.items():
+                        for tag, count in tag_dict.items():
+                            tag_clean = tag.strip()
+                            if tag_clean:
+                                all_tags[tag_clean] = all_tags.get(tag_clean, 0) + count
+
+                    if all_tags:
+                        sorted_tags = sorted(all_tags.items(), key=lambda x: x[1], reverse=True)
+                        trigger_word = sorted_tags[0][0]
+                except json.JSONDecodeError:
+                    pass
+
+            if not trigger_word:
+                trigger_word = meta.get('ss_output_name', '')
+
+            return trigger_word
+
+        except Exception as e:
+            print(f"[BoudoirSuperNode] Trigger extraction error: {e}")
+            return ""
+
+    def _get_random_prompt(self, category):
+        """Fetch random prompt from Boudoir API"""
+        try:
+            url = f"{API_BASE_URL}/random"
+            if category != "any":
+                url += f"?category={urllib.parse.quote(category)}"
+
+            req = urllib.request.Request(url)
+            req.add_header('Content-Type', 'application/json')
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode())
+
+            if data.get("success") and data.get("prompt"):
+                prompt_text = data["prompt"].get("text", "")
+                prompt_id = str(data["prompt"].get("id", ""))
+                return (prompt_text, prompt_id)
+
+            return ("", "")
+
+        except Exception as e:
+            print(f"[BoudoirSuperNode] Random prompt error: {e}")
+            return ("", "")
 
 
 # Node mappings for ComfyUI
