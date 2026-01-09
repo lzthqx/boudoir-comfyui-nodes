@@ -2181,9 +2181,9 @@ class OllamaPromptEnhancer:
                     "default": "",
                     "placeholder": "Enter prompt to enhance..."
                 }),
-                "ollama_model": ("STRING", {
-                    "default": "qwen2.5:latest",
-                    "tooltip": "Ollama model name for enhancement (e.g., llama3:latest, mistral:latest)"
+                "ollama_model": (get_ollama_models(), {
+                    "default": get_ollama_models()[0] if get_ollama_models() else "qwen2.5:latest",
+                    "tooltip": "Select Ollama model for enhancement"
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
@@ -2310,9 +2310,9 @@ class OllamaPromptEnhancerAdvanced:
                     "default": "",
                     "placeholder": "Enter prompt to enhance..."
                 }),
-                "ollama_model": ("STRING", {
-                    "default": "qwen2.5:latest",
-                    "tooltip": "Ollama model name (e.g., llama3:latest, mistral:latest)"
+                "ollama_model": (get_ollama_models(), {
+                    "default": get_ollama_models()[0] if get_ollama_models() else "qwen2.5:latest",
+                    "tooltip": "Select Ollama model for enhancement"
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
