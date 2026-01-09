@@ -1626,7 +1626,7 @@ class BoudoirAllInOneNode:
                 model_options["load_device"] = torch.device(clip_dev)
             clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
                                        embedding_directory=folder_paths.get_folder_paths("embeddings"),
-                                       model_options=model_options if model_options else None)
+                                       model_options=model_options)
 
         # === Load VAE (or None) ===
         vae = None
