@@ -1548,6 +1548,9 @@ class BoudoirAllInOneNode:
     All-in-one node for Boudoir Studio workflows.
     Combines CLIP/VAE loading, LoRA with triggers, resolution selection,
     and prompt handling (manual or random from Boudoir API).
+
+    Supports optional CLIP and VAE inputs from checkpoint loaders.
+    If CLIP/VAE inputs are connected, they take priority over the built-in selectors.
     """
 
     RESOLUTIONS = [
@@ -1570,10 +1573,10 @@ class BoudoirAllInOneNode:
         return {
             "required": {
                 "model": ("MODEL",),
-                "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model to load (or None to skip)"}),
-                "clip_device": (gpu_options, {"default": "auto", "tooltip": "GPU for CLIP model"}),
-                "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE to load (or None to skip)"}),
-                "vae_device": (gpu_options, {"default": "auto", "tooltip": "GPU for VAE model"}),
+                "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model to load (ignored if CLIP input is connected)"}),
+                "clip_device": (gpu_options, {"default": "auto", "tooltip": "GPU for CLIP model (only used with built-in loader)"}),
+                "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE to load (ignored if VAE input is connected)"}),
+                "vae_device": (gpu_options, {"default": "auto", "tooltip": "GPU for VAE model (only used with built-in loader)"}),
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
                 "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
@@ -1585,6 +1588,10 @@ class BoudoirAllInOneNode:
                 "lora_strength_clip": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
                 "use_trigger": ("BOOLEAN", {"default": True, "label_on": "Add Trigger Word", "label_off": "No Trigger"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1, "tooltip": "Seed for random prompt selection"}),
+            },
+            "optional": {
+                "clip_in": ("CLIP", {"tooltip": "Optional CLIP input from checkpoint loader (takes priority over built-in selector)"}),
+                "vae_in": ("VAE", {"tooltip": "Optional VAE input from checkpoint loader (takes priority over built-in selector)"}),
             },
         }
 
@@ -1601,7 +1608,8 @@ class BoudoirAllInOneNode:
 
     def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
                 use_random_prompt, prompt_category, positive_prompt, negative_prompt,
-                lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed):
+                lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed,
+                clip_in=None, vae_in=None):
         import torch
         import folder_paths
         import comfy.utils
@@ -1617,9 +1625,13 @@ class BoudoirAllInOneNode:
         clip_dev = parse_device(clip_device)
         vae_dev = parse_device(vae_device)
 
-        # === Load CLIP (or None) ===
+        # === CLIP: Use input if connected, otherwise load from selector ===
         clip = None
-        if clip_name and clip_name != "None":
+        if clip_in is not None:
+            # Use the connected CLIP input (from checkpoint loader)
+            clip = clip_in
+        elif clip_name and clip_name != "None":
+            # Fall back to built-in CLIP loader
             clip_path = folder_paths.get_full_path_or_raise("clip", clip_name)
             model_options = {}
             if clip_dev:
@@ -1628,9 +1640,13 @@ class BoudoirAllInOneNode:
                                        embedding_directory=folder_paths.get_folder_paths("embeddings"),
                                        model_options=model_options)
 
-        # === Load VAE (or None) ===
+        # === VAE: Use input if connected, otherwise load from selector ===
         vae = None
-        if vae_name and vae_name != "None":
+        if vae_in is not None:
+            # Use the connected VAE input (from checkpoint loader)
+            vae = vae_in
+        elif vae_name and vae_name != "None":
+            # Fall back to built-in VAE loader
             vae_path = folder_paths.get_full_path_or_raise("vae", vae_name)
             vae_sd = comfy.utils.load_torch_file(vae_path)
             if vae_dev:
@@ -2100,6 +2116,298 @@ class ZImageResolutionSelector:
         return ({"samples": latent}, width, height)
 
 
+# ============================================================================
+# Ollama Prompt Enhancement Node
+# ============================================================================
+
+# Default Ollama server URL
+OLLAMA_DEFAULT_URL = "http://10.10.10.138:11434"
+
+# Default system prompt for prompt enhancement
+OLLAMA_DEFAULT_SYSTEM_PROMPT = """You are a prompt enhancement specialist for AI image generation.
+Your task is to take the user's prompt and enhance it to be more detailed and descriptive while maintaining the original intent.
+
+Guidelines:
+- Add sensory details (lighting, textures, atmosphere)
+- Include artistic style references where appropriate
+- Maintain the core subject and mood
+- Keep the output as a single flowing prompt paragraph
+- Do NOT include any explanations or commentary
+- Output ONLY the enhanced prompt text"""
+
+def get_ollama_models(server_url=None):
+    """Fetch available models from Ollama server"""
+    url = server_url or OLLAMA_DEFAULT_URL
+    try:
+        req = urllib.request.Request(f"{url}/api/tags")
+        req.add_header('Content-Type', 'application/json')
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            if data.get("models"):
+                return [m["name"] for m in data["models"]]
+    except Exception as e:
+        print(f"[OllamaPromptEnhancer] Error fetching models: {e}")
+    return ["llama3.1:latest", "mistral:latest", "qwen2.5:latest"]  # Fallback defaults
+
+
+class BoudoirTestNode:
+    """Minimal test node to verify registration works."""
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"text": ("STRING", {"default": "test"})}}
+    RETURN_TYPES = ("STRING",)
+    FUNCTION = "run"
+    CATEGORY = "Boudoir Studio/Test"
+    def run(self, text):
+        return (text,)
+
+
+class OllamaPromptEnhancer:
+    """
+    Ollama-powered prompt enhancement node.
+    Takes an input prompt and enhances it using a local Ollama model.
+    Supports passthrough of trigger words for workflow integration.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "Enter prompt to enhance..."
+                }),
+                "ollama_model": ("STRING", {
+                    "default": "qwen2.5:latest",
+                    "tooltip": "Ollama model name for enhancement (e.g., llama3:latest, mistral:latest)"
+                }),
+                "system_prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "Enhance this prompt for AI image generation. Add details about lighting, atmosphere, and artistic style. Output only the enhanced prompt.",
+                    "tooltip": "System prompt that controls how enhancement works"
+                }),
+                "enabled": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Enhance",
+                    "label_off": "Bypass",
+                    "tooltip": "Enable/disable enhancement (bypass passes prompt through unchanged)"
+                }),
+                "temperature": ("FLOAT", {
+                    "default": 0.7,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.1,
+                    "tooltip": "Generation temperature (higher = more creative)"
+                }),
+                "prepend_trigger": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Prepend Trigger",
+                    "label_off": "Append Trigger",
+                    "tooltip": "Whether to prepend or append trigger words to output"
+                }),
+            },
+            "optional": {
+                "trigger_in": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Trigger words to include in output prompt"
+                }),
+                "ollama_url": ("STRING", {
+                    "default": OLLAMA_DEFAULT_URL,
+                    "tooltip": "Ollama server URL (default: http://10.10.10.138:11434)"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("enhanced_prompt", "trigger_out")
+    FUNCTION = "enhance_prompt"
+    CATEGORY = "Boudoir Studio/Prompts"
+
+    def enhance_prompt(self, prompt, ollama_model, system_prompt, enabled, temperature,
+                       prepend_trigger, trigger_in=None, ollama_url=None):
+
+        # Passthrough trigger
+        trigger_out = trigger_in.strip() if trigger_in else ""
+
+        # If disabled, just pass through with trigger handling
+        if not enabled or not prompt.strip():
+            final_prompt = prompt.strip()
+            if trigger_out:
+                if prepend_trigger:
+                    final_prompt = f"{trigger_out} {final_prompt}" if final_prompt else trigger_out
+                else:
+                    final_prompt = f"{final_prompt} {trigger_out}" if final_prompt else trigger_out
+            return (final_prompt, trigger_out)
+
+        # Enhance the prompt via Ollama
+        server_url = ollama_url or OLLAMA_DEFAULT_URL
+
+        try:
+            print(f"[OllamaPromptEnhancer] Enhancing prompt with {ollama_model}...")
+
+            request_data = {
+                "model": ollama_model,
+                "prompt": prompt.strip(),
+                "system": system_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "top_p": 0.9
+                }
+            }
+
+            req = urllib.request.Request(
+                f"{server_url}/api/generate",
+                data=json.dumps(request_data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+
+            with urllib.request.urlopen(req, timeout=60) as response:
+                data = json.loads(response.read().decode())
+                enhanced = data.get("response", "").strip()
+
+            if not enhanced:
+                print("[OllamaPromptEnhancer] Empty response, using original prompt")
+                enhanced = prompt.strip()
+            else:
+                print(f"[OllamaPromptEnhancer] Enhanced ({len(prompt)} -> {len(enhanced)} chars)")
+
+        except Exception as e:
+            print(f"[OllamaPromptEnhancer] Error: {e}")
+            enhanced = prompt.strip()  # Fall back to original on error
+
+        # Combine with trigger words
+        final_prompt = enhanced
+        if trigger_out:
+            if prepend_trigger:
+                final_prompt = f"{trigger_out} {enhanced}"
+            else:
+                final_prompt = f"{enhanced} {trigger_out}"
+
+        return (final_prompt, trigger_out)
+
+
+class OllamaPromptEnhancerAdvanced:
+    """
+    Advanced Ollama prompt enhancement with CONDITIONING output.
+    Encodes the enhanced prompt directly to CONDITIONING for use with samplers.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "Enter prompt to enhance..."
+                }),
+                "ollama_model": ("STRING", {
+                    "default": "qwen2.5:latest",
+                    "tooltip": "Ollama model name (e.g., llama3:latest, mistral:latest)"
+                }),
+                "system_prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "Enhance this prompt for AI image generation. Add details about lighting, atmosphere, and artistic style. Output only the enhanced prompt."
+                }),
+                "enabled": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Enhance",
+                    "label_off": "Bypass"
+                }),
+                "temperature": ("FLOAT", {
+                    "default": 0.7,
+                    "min": 0.0,
+                    "max": 2.0,
+                    "step": 0.1
+                }),
+                "prepend_trigger": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Prepend Trigger",
+                    "label_off": "Append Trigger"
+                }),
+            },
+            "optional": {
+                "trigger_in": ("STRING", {"forceInput": True}),
+                "ollama_url": ("STRING", {"default": OLLAMA_DEFAULT_URL}),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "STRING", "STRING")
+    RETURN_NAMES = ("CONDITIONING", "enhanced_prompt", "trigger_out")
+    FUNCTION = "enhance_and_encode"
+    CATEGORY = "Boudoir Studio/Prompts"
+
+    def enhance_and_encode(self, clip, prompt, ollama_model, system_prompt, enabled,
+                           temperature, prepend_trigger, trigger_in=None, ollama_url=None):
+
+        trigger_out = trigger_in.strip() if trigger_in else ""
+
+        # Get enhanced prompt using the basic enhancer logic
+        if not enabled or not prompt.strip():
+            final_prompt = prompt.strip()
+            if trigger_out:
+                if prepend_trigger:
+                    final_prompt = f"{trigger_out} {final_prompt}" if final_prompt else trigger_out
+                else:
+                    final_prompt = f"{final_prompt} {trigger_out}" if final_prompt else trigger_out
+        else:
+            # Enhance via Ollama
+            server_url = ollama_url or OLLAMA_DEFAULT_URL
+            try:
+                print(f"[OllamaPromptEnhancerAdvanced] Enhancing with {ollama_model}...")
+
+                request_data = {
+                    "model": ollama_model,
+                    "prompt": prompt.strip(),
+                    "system": system_prompt,
+                    "stream": False,
+                    "options": {"temperature": temperature, "top_p": 0.9}
+                }
+
+                req = urllib.request.Request(
+                    f"{server_url}/api/generate",
+                    data=json.dumps(request_data).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'}
+                )
+
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode())
+                    enhanced = data.get("response", "").strip()
+
+                if not enhanced:
+                    enhanced = prompt.strip()
+                else:
+                    print(f"[OllamaPromptEnhancerAdvanced] Enhanced ({len(prompt)} -> {len(enhanced)} chars)")
+
+            except Exception as e:
+                print(f"[OllamaPromptEnhancerAdvanced] Error: {e}")
+                enhanced = prompt.strip()
+
+            # Combine with trigger
+            final_prompt = enhanced
+            if trigger_out:
+                if prepend_trigger:
+                    final_prompt = f"{trigger_out} {enhanced}"
+                else:
+                    final_prompt = f"{enhanced} {trigger_out}"
+
+        # Encode to CONDITIONING
+        tokens = clip.tokenize(final_prompt)
+        cond, pooled = clip.encode_from_tokens(tokens, return_pooled=True)
+        conditioning = [[cond, {"pooled_output": pooled}]]
+
+        return (conditioning, final_prompt, trigger_out)
+
+
 # Node mappings for ComfyUI
 NODE_CLASS_MAPPINGS = {
     "BoudoirPromptSearch": BoudoirPromptSearch,
@@ -2120,6 +2428,9 @@ NODE_CLASS_MAPPINGS = {
     "BoudoirSaveText": BoudoirSaveText,
     "BoudoirLatentResolutionSelector": BoudoirLatentResolutionSelector,
     "ZImageResolutionSelector": ZImageResolutionSelector,
+    "OllamaPromptEnhancer": OllamaPromptEnhancer,
+    "OllamaPromptEnhancerAdvanced": OllamaPromptEnhancerAdvanced,
+    "BoudoirTestNode": BoudoirTestNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2141,4 +2452,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "BoudoirSaveText": "Boudoir Save Text",
     "BoudoirLatentResolutionSelector": "Boudoir Latent Resolution Selector",
     "ZImageResolutionSelector": "Boudoir Z-Image Resolution Selector",
+    "OllamaPromptEnhancer": "Boudoir Prompt Enhancer",
+    "OllamaPromptEnhancerAdvanced": "Boudoir Prompt Enhancer (CONDITIONING)",
+    "BoudoirTestNode": "Boudoir Test Node",
 }
