@@ -2463,13 +2463,14 @@ class BoudoirSuperNode:
     ]
 
     def __init__(self):
-        self.loaded_lora = None
+        self.loaded_loras = {}  # Cache for loaded LoRAs
 
     @classmethod
     def INPUT_TYPES(cls):
         import folder_paths
         gpu_options = get_available_gpus()
         ollama_models = get_ollama_models()
+        lora_list = ["None"] + folder_paths.get_filename_list("loras")
         return {
             "required": {
                 "model": ("MODEL",),
@@ -2483,10 +2484,33 @@ class BoudoirSuperNode:
                 "prompt_category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {"default": "any"}),
                 "positive_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Positive prompt (used when Manual Prompt selected)"}),
                 "negative_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Negative prompt"}),
-                "lora_name": (["None"] + folder_paths.get_filename_list("loras"), {"tooltip": "Select LoRA (optional)"}),
-                "lora_strength_model": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-                "lora_strength_clip": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-                "use_trigger": ("BOOLEAN", {"default": True, "label_on": "Add Trigger Word", "label_off": "No Trigger"}),
+                # === USER LORA (Slot 1) - Personal/Character LoRA ===
+                "user_lora_enabled": ("BOOLEAN", {"default": True, "label_on": "User LoRA ON", "label_off": "User LoRA OFF", "tooltip": "Enable/disable user's personal LoRA"}),
+                "user_lora_name": (lora_list, {"tooltip": "User's personal/character LoRA"}),
+                "user_lora_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "User LoRA model strength"}),
+                "user_lora_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "User LoRA CLIP strength"}),
+                # === STYLE LORA 1 (Slot 2) ===
+                "style_lora1_enabled": ("BOOLEAN", {"default": False, "label_on": "Style 1 ON", "label_off": "Style 1 OFF", "tooltip": "Enable/disable style LoRA 1"}),
+                "style_lora1_name": (lora_list, {"tooltip": "Style LoRA 1"}),
+                "style_lora1_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "style_lora1_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                # === STYLE LORA 2 (Slot 3) ===
+                "style_lora2_enabled": ("BOOLEAN", {"default": False, "label_on": "Style 2 ON", "label_off": "Style 2 OFF", "tooltip": "Enable/disable style LoRA 2"}),
+                "style_lora2_name": (lora_list, {"tooltip": "Style LoRA 2"}),
+                "style_lora2_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "style_lora2_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                # === NSFW LORA 1 (Slot 4) - Requires permission ===
+                "nsfw_lora1_enabled": ("BOOLEAN", {"default": False, "label_on": "NSFW 1 ON", "label_off": "NSFW 1 OFF", "tooltip": "Enable/disable NSFW LoRA 1 (requires permission)"}),
+                "nsfw_lora1_name": (lora_list, {"tooltip": "NSFW/Spicy LoRA 1"}),
+                "nsfw_lora1_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "nsfw_lora1_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                # === NSFW LORA 2 (Slot 5) - Requires permission ===
+                "nsfw_lora2_enabled": ("BOOLEAN", {"default": False, "label_on": "NSFW 2 ON", "label_off": "NSFW 2 OFF", "tooltip": "Enable/disable NSFW LoRA 2 (requires permission)"}),
+                "nsfw_lora2_name": (lora_list, {"tooltip": "NSFW/Spicy LoRA 2"}),
+                "nsfw_lora2_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                "nsfw_lora2_clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
+                # === Common settings ===
+                "use_trigger": ("BOOLEAN", {"default": True, "label_on": "Add Trigger Words", "label_off": "No Triggers", "tooltip": "Extract and prepend trigger words from all enabled LoRAs"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "step": 1, "tooltip": "Seed for random prompt"}),
                 "enhance_enabled": ("BOOLEAN", {"default": True, "label_on": "Enhance Prompt", "label_off": "No Enhancement", "tooltip": "Enable Ollama prompt enhancement"}),
                 "ollama_model": (ollama_models, {"default": ollama_models[0] if ollama_models else "qwen2.5:latest", "tooltip": "Ollama model for enhancement"}),
@@ -2515,7 +2539,12 @@ class BoudoirSuperNode:
 
     def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
                 use_random_prompt, prompt_category, positive_prompt, negative_prompt,
-                lora_name, lora_strength_model, lora_strength_clip, use_trigger, seed,
+                user_lora_enabled, user_lora_name, user_lora_strength, user_lora_clip_strength,
+                style_lora1_enabled, style_lora1_name, style_lora1_strength, style_lora1_clip_strength,
+                style_lora2_enabled, style_lora2_name, style_lora2_strength, style_lora2_clip_strength,
+                nsfw_lora1_enabled, nsfw_lora1_name, nsfw_lora1_strength, nsfw_lora1_clip_strength,
+                nsfw_lora2_enabled, nsfw_lora2_name, nsfw_lora2_strength, nsfw_lora2_clip_strength,
+                use_trigger, seed,
                 enhance_enabled, ollama_model, temperature, system_prompt, extra_triggers,
                 clip_in=None, vae_in=None, ollama_url=None):
         import torch
@@ -2557,32 +2586,54 @@ class BoudoirSuperNode:
             else:
                 vae = comfy.sd.VAE(sd=vae_sd)
 
-        # === Apply LoRA and extract trigger ===
+        # === Apply LoRAs (5 slots) and extract triggers ===
         model_lora = model
         clip_lora = clip
-        trigger_words = ""
+        trigger_list = []
 
-        if lora_name and lora_name != "None":
-            lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
-            lora = None
+        # Define all 5 LoRA slots
+        lora_slots = [
+            ("User LoRA", user_lora_enabled, user_lora_name, user_lora_strength, user_lora_clip_strength),
+            ("Style 1", style_lora1_enabled, style_lora1_name, style_lora1_strength, style_lora1_clip_strength),
+            ("Style 2", style_lora2_enabled, style_lora2_name, style_lora2_strength, style_lora2_clip_strength),
+            ("NSFW 1", nsfw_lora1_enabled, nsfw_lora1_name, nsfw_lora1_strength, nsfw_lora1_clip_strength),
+            ("NSFW 2", nsfw_lora2_enabled, nsfw_lora2_name, nsfw_lora2_strength, nsfw_lora2_clip_strength),
+        ]
 
-            if self.loaded_lora is not None:
-                if self.loaded_lora[0] == lora_path:
-                    lora = self.loaded_lora[1]
+        for slot_name, enabled, lora_name, strength_model, strength_clip in lora_slots:
+            if not enabled or not lora_name or lora_name == "None":
+                continue
+            if strength_model == 0 and strength_clip == 0:
+                continue
+
+            try:
+                lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
+
+                # Use cached LoRA if available
+                if lora_path in self.loaded_loras:
+                    lora = self.loaded_loras[lora_path]
                 else:
-                    self.loaded_lora = None
+                    lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+                    self.loaded_loras[lora_path] = lora
 
-            if lora is None:
-                lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
-                self.loaded_lora = (lora_path, lora)
-
-            if lora_strength_model != 0 or lora_strength_clip != 0:
+                # Apply LoRA to model and clip
                 model_lora, clip_lora = comfy.sd.load_lora_for_models(
-                    model, clip, lora, lora_strength_model, lora_strength_clip
+                    model_lora, clip_lora, lora, strength_model, strength_clip
                 )
+                print(f"[BoudoirSuperNode] Loaded {slot_name}: {lora_name} (model={strength_model}, clip={strength_clip})")
 
-            if use_trigger:
-                trigger_words = self._extract_trigger(lora_name)
+                # Extract trigger word
+                if use_trigger:
+                    trigger = self._extract_trigger(lora_name)
+                    if trigger.strip():
+                        trigger_list.append(trigger.strip())
+
+            except Exception as e:
+                print(f"[BoudoirSuperNode] Error loading {slot_name} ({lora_name}): {e}")
+                continue
+
+        # Combine all trigger words
+        trigger_words = ", ".join(trigger_list) if trigger_list else ""
 
         # === Get prompt (random or manual) ===
         prompt_id = ""
@@ -2626,7 +2677,7 @@ class BoudoirSuperNode:
                 print(f"[BoudoirSuperNode] Enhancement error: {e}")
                 enhanced_prompt = base_prompt
 
-        # Prepend trigger words to enhanced prompt (internal LoRA + extra upstream triggers)
+        # Prepend trigger words to enhanced prompt (internal LoRAs + extra upstream triggers)
         final_prompt = enhanced_prompt
         all_triggers = []
         if trigger_words.strip():
