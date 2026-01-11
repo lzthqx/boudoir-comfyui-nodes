@@ -2778,6 +2778,77 @@ class BoudoirSuperNode:
 
 
 # Node mappings for ComfyUI
+
+class BoudoirSeed:
+    """
+    Seed generator with selectable bit depth (32-bit or 64-bit).
+    Use 32-bit for compatibility with nodes that use numpy random (like SeedVR2VideoUpscaler).
+    Use 64-bit for nodes that support larger seed ranges.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "seed": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 0xffffffffffffffff,
+                    "step": 1,
+                    "display": "number"
+                }),
+                "bit_depth": (["32-bit (numpy compatible)", "64-bit (full range)"], {
+                    "default": "32-bit (numpy compatible)"
+                }),
+                "mode": (["fixed", "randomize", "increment", "decrement"], {
+                    "default": "randomize"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("INT", "INT", "STRING")
+    RETURN_NAMES = ("seed", "seed_64bit", "seed_info")
+    FUNCTION = "generate_seed"
+    CATEGORY = "Boudoir Studio/Utils"
+
+    @classmethod
+    def IS_CHANGED(cls, seed, bit_depth, mode):
+        if mode == "randomize":
+            return random.random()
+        return seed
+
+    def generate_seed(self, seed, bit_depth, mode):
+        # Generate new seed based on mode
+        if mode == "randomize":
+            if "32-bit" in bit_depth:
+                new_seed = random.randint(0, 0xFFFFFFFF)
+            else:
+                new_seed = random.randint(0, 0xFFFFFFFFFFFFFFFF)
+        elif mode == "increment":
+            new_seed = seed + 1
+        elif mode == "decrement":
+            new_seed = max(0, seed - 1)
+        else:  # fixed
+            new_seed = seed
+
+        # Calculate both versions
+        seed_32bit = new_seed % (2**32)
+        seed_64bit = new_seed
+
+        # Select output based on bit depth
+        if "32-bit" in bit_depth:
+            output_seed = seed_32bit
+        else:
+            output_seed = seed_64bit
+
+        info = f"Mode: {mode}, Depth: {bit_depth}\n32-bit: {seed_32bit}\n64-bit: {seed_64bit}"
+
+        return (output_seed, seed_64bit, info)
+
+
 NODE_CLASS_MAPPINGS = {
     "BoudoirPromptSearch": BoudoirPromptSearch,
     "BoudoirRandomPrompt": BoudoirRandomPrompt,
@@ -2800,6 +2871,7 @@ NODE_CLASS_MAPPINGS = {
     "OllamaPromptEnhancer": OllamaPromptEnhancer,
     "OllamaPromptEnhancerAdvanced": OllamaPromptEnhancerAdvanced,
     "BoudoirSuperNode": BoudoirSuperNode,
+    "BoudoirSeed": BoudoirSeed,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2824,4 +2896,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OllamaPromptEnhancer": "Boudoir Prompt Enhancer",
     "OllamaPromptEnhancerAdvanced": "Boudoir Prompt Enhancer (CONDITIONING)",
     "BoudoirSuperNode": "Boudoir Super-Node",
+    "BoudoirSeed": "Boudoir Seed (32/64-bit)",
 }
