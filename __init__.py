@@ -15,6 +15,30 @@ API_BASE_URL = "http://10.10.10.138:3001/api/prompts"
 # Set web directory for frontend JS extension
 WEB_DIRECTORY = "./js"
 
+# Cache for categories (refreshed on each ComfyUI restart)
+_cached_categories = None
+
+def get_prompt_categories():
+    """Fetch prompt categories from the API (cached for session)"""
+    global _cached_categories
+    if _cached_categories is not None:
+        return _cached_categories
+
+    try:
+        url = f"{API_BASE_URL}/categories"
+        req = urllib.request.Request(url, headers={'User-Agent': 'ComfyUI-BoudoirPromptLibrary'})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            if data.get("success") and data.get("categories"):
+                _cached_categories = ["any"] + sorted(data["categories"])
+                return _cached_categories
+    except Exception as e:
+        print(f"[BoudoirPromptLibrary] Could not fetch categories: {e}")
+
+    # Fallback to default categories if API fails
+    _cached_categories = ["any", "artistic", "dramatic", "elegant", "erotic", "fantasy", "fashion", "fine art", "modern", "nature", "other", "romantic", "vintage"]
+    return _cached_categories
+
 # Register custom API routes
 from aiohttp import web
 from server import PromptServer
@@ -202,7 +226,7 @@ class BoudoirPromptSearch:
                     "multiline": False,
                     "placeholder": "Search keywords..."
                 }),
-                "category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {
+                "category": (get_prompt_categories(), {
                     "default": "any"
                 }),
                 "result_index": ("INT", {
@@ -277,7 +301,7 @@ class BoudoirRandomPrompt:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {
+                "category": (get_prompt_categories(), {
                     "default": "any"
                 }),
                 "seed": ("INT", {
@@ -1580,7 +1604,7 @@ class BoudoirAllInOneNode:
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
                 "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
-                "prompt_category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {"default": "any"}),
+                "prompt_category": (get_prompt_categories(), {"default": "any"}),
                 "positive_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Positive prompt (used when Manual Prompt is selected)"}),
                 "negative_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Negative prompt"}),
                 "lora_name": (["None"] + folder_paths.get_filename_list("loras"), {"tooltip": "Select LoRA (optional)"}),
@@ -2481,7 +2505,7 @@ class BoudoirSuperNode:
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
                 "batch_size": ("INT", {"default": 1, "min": 1, "max": 64, "step": 1}),
                 "use_random_prompt": ("BOOLEAN", {"default": False, "label_on": "Random Prompt", "label_off": "Manual Prompt"}),
-                "prompt_category": (["any", "artistic", "elegant", "fantasy", "dramatic", "romantic", "erotic", "couples", "implied"], {"default": "any"}),
+                "prompt_category": (get_prompt_categories(), {"default": "any"}),
                 "positive_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Positive prompt (used when Manual Prompt selected)"}),
                 "negative_prompt": ("STRING", {"default": "", "multiline": True, "placeholder": "Negative prompt"}),
                 # === USER LORA (Slot 1) - Personal/Character LoRA ===
