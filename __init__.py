@@ -1883,13 +1883,20 @@ class BoudoirSaveImageWithText:
 
             # Calculate and append generation time if enabled
             time_suffix = ""
-            if append_generation_time and timer_id and timer_id in _execution_timers:
-                import time as time_module
-                elapsed = time_module.time() - _execution_timers[timer_id]
-                time_suffix = f"_{format_duration(elapsed)}"
-                print(f"[BoudoirSaveImageWithText] Generation time: {format_duration(elapsed)}")
-                # Clean up the timer
-                del _execution_timers[timer_id]
+            if append_generation_time:
+                print(f"[BoudoirSaveImageWithText] append_generation_time=True, timer_id={timer_id}")
+                print(f"[BoudoirSaveImageWithText] Available timers: {list(_execution_timers.keys())}")
+                if timer_id and timer_id in _execution_timers:
+                    import time as time_module
+                    elapsed = time_module.time() - _execution_timers[timer_id]
+                    time_suffix = f"_{format_duration(elapsed)}"
+                    print(f"[BoudoirSaveImageWithText] Generation time: {format_duration(elapsed)}")
+                    # Clean up the timer
+                    del _execution_timers[timer_id]
+                elif timer_id:
+                    print(f"[BoudoirSaveImageWithText] WARNING: timer_id '{timer_id}' not found in timers!")
+                else:
+                    print(f"[BoudoirSaveImageWithText] WARNING: No timer_id connected. Connect BoudoirExecutionTimer node.")
             
             # Append time suffix to prefix
             file_prefix = file_prefix + time_suffix
@@ -2852,9 +2859,9 @@ class BoudoirSuperNode:
 # Node mappings for ComfyUI
 class BoudoirExecutionTimer:
     """
-    Execution timer node - place at the start of your workflow to track generation time.
-    Connect any input (MODEL, IMAGE, etc.) and it will pass through unchanged.
-    The timer_id output connects to BoudoirSaveImageWithText to append time to filename.
+    Execution timer node - place early in your workflow to track generation time.
+    Connect the timer_id output to BoudoirSaveImageWithText's timer_id input.
+    Enable 'Append Time' on the save node to add generation time to filenames.
     """
 
     def __init__(self):
@@ -2864,24 +2871,27 @@ class BoudoirExecutionTimer:
     def INPUT_TYPES(cls):
         return {
             "required": {},
-            "optional": {
-                "passthrough": ("*", {"tooltip": "Any input to pass through unchanged"}),
-            },
         }
 
-    RETURN_TYPES = ("*", "STRING")
-    RETURN_NAMES = ("passthrough", "timer_id")
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("timer_id",)
     FUNCTION = "start_timer"
     CATEGORY = "Boudoir Studio"
-    DESCRIPTION = "Start a timer at workflow execution. Connect timer_id to BoudoirSaveImageWithText to append generation time to filename."
+    OUTPUT_NODE = False
+    DESCRIPTION = "Start a timer. Connect timer_id to BoudoirSaveImageWithText to append generation time to filename."
 
-    def start_timer(self, passthrough=None):
+    @classmethod
+    def IS_CHANGED(cls):
+        # Always re-execute to get fresh timer
+        return float("nan")
+
+    def start_timer(self):
         import time
         import uuid
         timer_id = str(uuid.uuid4())[:8]
         _execution_timers[timer_id] = time.time()
-        print(f"[BoudoirExecutionTimer] Started timer {timer_id}")
-        return (passthrough, timer_id)
+        print(f"[BoudoirExecutionTimer] Started timer {timer_id} at {time.time():.2f}")
+        return (timer_id,)
 
 
 
