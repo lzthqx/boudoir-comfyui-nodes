@@ -1904,6 +1904,12 @@ class BoudoirSaveImageWithText:
                     metadata = PngImagePlugin.PngInfo()
                     for k, v in extra_pnginfo.items():
                         metadata.add_text(k, json.dumps(v))
+                # Add enhanced prompt as custom field (for extraction tools)
+                if text_content and not preview_only:
+                    if metadata is None:
+                        from PIL import PngImagePlugin
+                        metadata = PngImagePlugin.PngInfo()
+                    metadata.add_text("enhanced_display", text_content)
                 img.save(image_path, pnginfo=metadata, compress_level=4)
             elif image_format == "jpg":
                 img.save(image_path, quality=quality)
@@ -2547,6 +2553,9 @@ class BoudoirSuperNode:
                 "vae_in": ("VAE", {"tooltip": "Optional VAE from checkpoint loader"}),
                 "ollama_url": ("STRING", {"default": OLLAMA_DEFAULT_URL, "tooltip": "Ollama server URL"}),
             },
+            "hidden": {
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
         }
 
     RETURN_TYPES = ("MODEL", "CLIP", "LATENT", "CONDITIONING", "CONDITIONING", "VAE", "STRING", "STRING", "STRING", "STRING")
@@ -2570,7 +2579,7 @@ class BoudoirSuperNode:
                 nsfw_lora2_enabled, nsfw_lora2_name, nsfw_lora2_strength, nsfw_lora2_clip_strength,
                 use_trigger, seed,
                 enhance_enabled, ollama_model, temperature, system_prompt, extra_triggers,
-                clip_in=None, vae_in=None, ollama_url=None):
+                clip_in=None, vae_in=None, ollama_url=None, extra_pnginfo=None):
         import torch
         import folder_paths
         import comfy.utils
@@ -2727,6 +2736,11 @@ class BoudoirSuperNode:
             tokens_neg = clip_lora.tokenize(negative_prompt)
             cond_neg, pooled_neg = clip_lora.encode_from_tokens(tokens_neg, return_pooled=True)
             negative_cond = [[cond_neg, {"pooled_output": pooled_neg}]]
+
+        # Inject enhanced prompt into extra_pnginfo for all save nodes
+        if extra_pnginfo is not None:
+            extra_pnginfo["enhanced_display"] = final_prompt
+            print(f"[BoudoirSuperNode] Injected enhanced_display into metadata ({len(final_prompt)} chars)")
 
         return {
             "ui": {"text": [final_prompt]},
