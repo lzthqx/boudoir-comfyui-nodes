@@ -2506,6 +2506,7 @@ class BoudoirSuperNode:
                 "model": ("MODEL",),
                 "clip_name": (["None"] + folder_paths.get_filename_list("clip"), {"tooltip": "Select CLIP model (ignored if CLIP input connected)"}),
                 "clip_device": (gpu_options, {"default": "auto", "tooltip": "GPU for CLIP model"}),
+                "clip_type": (["stable_diffusion", "sd3", "flux", "flux2", "qwen_image", "hunyuan_image", "hidream", "ltxv", "pixart", "cosmos", "lumina2", "wan", "stable_cascade", "stable_audio", "mochi", "chroma", "ace", "omnigen2", "ovis"], {"default": "stable_diffusion", "tooltip": "CLIP type for the model architecture"}),
                 "vae_name": (["None"] + folder_paths.get_filename_list("vae"), {"tooltip": "Select VAE (ignored if VAE input connected)"}),
                 "vae_device": (gpu_options, {"default": "auto", "tooltip": "GPU for VAE model"}),
                 "resolution": (cls.RESOLUTIONS, {"default": "1:1 - 1328x1328 (Square)"}),
@@ -2570,7 +2571,7 @@ class BoudoirSuperNode:
             return seed
         return ""
 
-    def process(self, model, clip_name, clip_device, vae_name, vae_device, resolution, batch_size,
+    def process(self, model, clip_name, clip_device, clip_type, vae_name, vae_device, resolution, batch_size,
                 use_random_prompt, prompt_category, positive_prompt, negative_prompt,
                 user_lora_enabled, user_lora_name, user_lora_strength, user_lora_clip_strength,
                 style_lora1_enabled, style_lora1_name, style_lora1_strength, style_lora1_clip_strength,
@@ -2603,8 +2604,11 @@ class BoudoirSuperNode:
             model_options = {}
             if clip_dev:
                 model_options["load_device"] = torch.device(clip_dev)
+            # Convert clip_type string to CLIPType enum
+            clip_type_enum = getattr(comfy.sd.CLIPType, clip_type.upper(), comfy.sd.CLIPType.STABLE_DIFFUSION)
             clip = comfy.sd.load_clip(ckpt_paths=[clip_path],
                                        embedding_directory=folder_paths.get_folder_paths("embeddings"),
+                                       clip_type=clip_type_enum,
                                        model_options=model_options)
 
         # === VAE: Use input if connected, otherwise load ===
