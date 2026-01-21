@@ -12,6 +12,20 @@ import os
 # Default API base URL - uses host IP for Docker network access
 API_BASE_URL = "http://10.10.10.138:3001/api/prompts"
 
+# Timer storage for execution timing
+_execution_timers = {}
+
+def format_duration(seconds):
+    """Format seconds as human-readable duration (e.g., '1m30s', '45s')"""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if secs == 0:
+        return f"{minutes}m"
+    return f"{minutes}m{secs}s"
+
+
 # Set web directory for frontend JS extension
 WEB_DIRECTORY = "./js"
 
@@ -1829,9 +1843,11 @@ class BoudoirSaveImageWithText:
                 "preview_only": ("BOOLEAN", {"default": False, "label_on": "Preview Only", "label_off": "Save Image"}),
                 "save_text": ("BOOLEAN", {"default": True, "label_on": "Save Text", "label_off": "No Text"}),
                 "text_extension": ([".txt", ".csv", ".json", ".md"], {"default": ".txt"}),
+                "append_generation_time": ("BOOLEAN", {"default": False, "label_on": "Append Time", "label_off": "No Time", "tooltip": "Append generation time (e.g., _1m30s) to filename"}),
             },
             "optional": {
                 "text_content": ("STRING", {"forceInput": True, "multiline": True}),
+                "timer_id": ("STRING", {"forceInput": True, "tooltip": "Timer ID from BoudoirExecutionTimer node"}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -1845,7 +1861,7 @@ class BoudoirSaveImageWithText:
     FUNCTION = "save_image_and_text"
     CATEGORY = "Boudoir Studio"
 
-    def save_image_and_text(self, images, filename_prefix, image_format, quality, preview_only, save_text, text_extension=".txt", text_content="", prompt=None, extra_pnginfo=None):
+    def save_image_and_text(self, images, filename_prefix, image_format, quality, preview_only, save_text, text_extension=".txt", append_generation_time=False, text_content="", timer_id=None, prompt=None, extra_pnginfo=None):
         import folder_paths
         from PIL import Image
         import numpy as np
@@ -1864,6 +1880,19 @@ class BoudoirSaveImageWithText:
 
             # Generate unique filename with counter
             file_prefix = filename_prefix.strip()
+
+            # Calculate and append generation time if enabled
+            time_suffix = ""
+            if append_generation_time and timer_id and timer_id in _execution_timers:
+                import time as time_module
+                elapsed = time_module.time() - _execution_timers[timer_id]
+                time_suffix = f"_{format_duration(elapsed)}"
+                print(f"[BoudoirSaveImageWithText] Generation time: {format_duration(elapsed)}")
+                # Clean up the timer
+                del _execution_timers[timer_id]
+            
+            # Append time suffix to prefix
+            file_prefix = file_prefix + time_suffix
 
             if preview_only:
                 # For preview, save to temp directory
@@ -1957,6 +1986,7 @@ class BoudoirSaveText:
         return {
             "required": {
                 "text_content": ("STRING", {"forceInput": True, "multiline": True}),
+                "timer_id": ("STRING", {"forceInput": True, "tooltip": "Timer ID from BoudoirExecutionTimer node"}),
                 "filename": ("STRING", {"forceInput": True, "default": "output"}),
                 "extension": ([".txt", ".csv", ".json", ".md"], {"default": ".txt"}),
                 "output_location": (["default_output", "custom"], {"default": "default_output"}),
@@ -2820,6 +2850,40 @@ class BoudoirSuperNode:
 
 
 # Node mappings for ComfyUI
+class BoudoirExecutionTimer:
+    """
+    Execution timer node - place at the start of your workflow to track generation time.
+    Connect any input (MODEL, IMAGE, etc.) and it will pass through unchanged.
+    The timer_id output connects to BoudoirSaveImageWithText to append time to filename.
+    """
+
+    def __init__(self):
+        pass
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": {
+                "passthrough": ("*", {"tooltip": "Any input to pass through unchanged"}),
+            },
+        }
+
+    RETURN_TYPES = ("*", "STRING")
+    RETURN_NAMES = ("passthrough", "timer_id")
+    FUNCTION = "start_timer"
+    CATEGORY = "Boudoir Studio"
+    DESCRIPTION = "Start a timer at workflow execution. Connect timer_id to BoudoirSaveImageWithText to append generation time to filename."
+
+    def start_timer(self, passthrough=None):
+        import time
+        import uuid
+        timer_id = str(uuid.uuid4())[:8]
+        _execution_timers[timer_id] = time.time()
+        print(f"[BoudoirExecutionTimer] Started timer {timer_id}")
+        return (passthrough, timer_id)
+
+
 
 class BoudoirSeed:
     """
@@ -2914,6 +2978,7 @@ NODE_CLASS_MAPPINGS = {
     "OllamaPromptEnhancerAdvanced": OllamaPromptEnhancerAdvanced,
     "BoudoirSuperNode": BoudoirSuperNode,
     "BoudoirSeed": BoudoirSeed,
+    "BoudoirExecutionTimer": BoudoirExecutionTimer,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -2939,4 +3004,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "OllamaPromptEnhancerAdvanced": "Boudoir Prompt Enhancer (CONDITIONING)",
     "BoudoirSuperNode": "Boudoir Super-Node",
     "BoudoirSeed": "Boudoir Seed (32/64-bit)",
+    "BoudoirExecutionTimer": "Boudoir Execution Timer",
 }
