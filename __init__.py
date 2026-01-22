@@ -1848,7 +1848,7 @@ class BoudoirSaveImageWithText:
                 "append_generation_time": ("BOOLEAN", {"default": False, "label_on": "Append Time", "label_off": "No Time", "tooltip": "Append generation time (e.g., _1m30s) to filename"}),
             },
             "optional": {
-                "text_content": ("STRING", {"forceInput": True, "multiline": True, "default": ""}),
+                "text_content": ("STRING", {"multiline": True, "default": ""}),
             },
             "hidden": {
                 "prompt": "PROMPT",
