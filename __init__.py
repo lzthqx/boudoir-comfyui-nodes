@@ -1848,7 +1848,7 @@ class BoudoirSaveImageWithText:
                 "append_generation_time": ("BOOLEAN", {"default": False, "label_on": "Append Time", "label_off": "No Time", "tooltip": "Append generation time (e.g., _1m30s) to filename"}),
             },
             "optional": {
-                "text_content": ("STRING", {"forceInput": True, "multiline": True}),
+                "text_content": ("STRING", {"forceInput": True, "multiline": True, "default": ""}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -1862,7 +1862,10 @@ class BoudoirSaveImageWithText:
     FUNCTION = "save_image_and_text"
     CATEGORY = "Boudoir Studio"
 
-    def save_image_and_text(self, images, filename_prefix, image_format, quality, preview_only, save_text, text_extension=".txt", append_generation_time=False, text_content="", prompt=None, extra_pnginfo=None):
+    def save_image_and_text(self, images, filename_prefix, image_format, quality, preview_only, save_text, text_extension=".txt", append_generation_time=False, text_content=None, prompt=None, extra_pnginfo=None):
+        # Handle disconnected text_content input
+        if text_content is None:
+            text_content = ""
         import folder_paths
         from PIL import Image
         import numpy as np
